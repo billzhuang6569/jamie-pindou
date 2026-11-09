@@ -11,7 +11,11 @@ import {
   toggleBackground,
   toggleMirror,
 } from '../src/core/doc';
-import { EMPTY, buildCells, cleanStrays, limitColors, mergeSimilar, sampleCells } from '../src/core/generate';
+import { EMPTY, cleanStrays, limitColors, matchCells, mergeSimilar, sampleCells } from '../src/core/generate';
+import { placeImage } from '../src/core/image';
+import { dropSpecks, findBackground, unifyOutline } from '../src/core/outline';
+import { fitCropToSubject } from '../src/core/pattern';
+import { detectPixelGrid } from '../src/core/pixelGrid';
 import { BRANDS, brandById, matchableIndexes, seriesOf, type Bead } from '../src/core/palette';
 
 const bead = (code: string, r: number, g: number, b: number): Bead => ({
@@ -129,12 +133,184 @@ describe('merging', () => {
     limitColors(cells, colors, 1);
     expect(new Set(cells).size).toBe(1);
   });
-  it('turns samples into a pattern end to end', () => {
-    const px = (c: number[]) => [c, c, c, c].flat();
-    const samples = new Uint8ClampedArray([...px([255, 255, 255, 255]).slice(0, 8), ...px([0, 0, 0, 255]).slice(0, 8)]);
-    const cells = buildCells(samples, 2, 1, 1, colors, [WHITE, BLACK], { mergeThreshold: 0, maxColors: 0 });
-    expect(cells).toHaveLength(2);
-    expect(cells[0]).toBe(WHITE);
+  it('darkens and saturates only when asked', () => {
+    const pale = [230, 150, 150] as const;
+    const beads = [bead('pale', 230, 150, 150), bead('deep', 218, 125, 125)];
+    expect(matchCells([pale], beads, [0, 1])[0]).toBe(0);
+    expect(matchCells([pale], beads, [0, 1], true)[0]).toBe(1);
+  });
+});
+
+describe('thin lines', () => {
+  const red = [200, 30, 30, 255];
+  const white = [255, 255, 255, 255];
+  // One red column in a 4x4 cell of white: a quarter of the samples.
+  const cell = new Uint8ClampedArray(
+    Array.from({ length: 4 }, () => [red, white, white, white].flat()).flat(),
+  );
+  it('loses a thin line without line protection', () => {
+    expect(sampleCells(cell, 1, 1, 4, 0)[0]).toEqual([255, 255, 255]);
+  });
+  it('keeps a thin line against a pale field', () => {
+    expect(sampleCells(cell, 1, 1, 4, 1)[0]).toEqual([200, 30, 30]);
+  });
+  it('leaves a dark field alone', () => {
+    const dark = [20, 20, 60, 255];
+    const mixed = new Uint8ClampedArray(Array.from({ length: 4 }, () => [red, dark, dark, dark].flat()).flat());
+    expect(sampleCells(mixed, 1, 1, 4, 1)[0]).toEqual([20, 20, 60]);
+  });
+});
+
+/** Upscales a pixel-art grid with a possibly fractional scale, as an image editor would. */
+function upscale(art: number[][], scale: number, ox = 0, oy = 0) {
+  const width = Math.round(art[0].length * scale) + ox * 2;
+  const height = Math.round(art.length * scale) + oy * 2;
+  const data = new Uint8ClampedArray(width * height * 4).fill(255);
+  const palette = [
+    [255, 255, 255],
+    [200, 30, 30],
+    [20, 120, 60],
+    [240, 200, 60],
+    [40, 40, 140],
+  ];
+  for (let y = 0; y < height - oy * 2; y++) {
+    for (let x = 0; x < width - ox * 2; x++) {
+      const c = palette[art[Math.min(art.length - 1, Math.floor(y / scale))][Math.min(art[0].length - 1, Math.floor(x / scale))]];
+      const p = ((y + oy) * width + x + ox) * 4;
+      data[p] = c[0];
+      data[p + 1] = c[1];
+      data[p + 2] = c[2];
+    }
+  }
+  return { data, width, height };
+}
+
+function randomArt(w: number, h: number) {
+  let seed = 7;
+  const next = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff);
+  return Array.from({ length: h }, () => Array.from({ length: w }, () => next() % 5));
+}
+
+describe('pixel grid detection', () => {
+  it('finds a fractional grid', () => {
+    const g = detectPixelGrid(upscale(randomArt(40, 46), 15.4))!;
+    expect(g.sure).toBe(true);
+    expect(g.px).toBeCloseTo(15.4, 0);
+    expect(g.py).toBeCloseTo(15.4, 0);
+  });
+  it('picks the real period, not half of it', () => {
+    const g = detectPixelGrid(upscale(randomArt(30, 30), 17))!;
+    expect(g.sure).toBe(true);
+    expect(g.px).toBeGreaterThan(16);
+    expect(g.px).toBeLessThan(18);
+  });
+  it('recognises crisp art at a small scale', () => {
+    const g = detectPixelGrid(upscale(randomArt(60, 60), 4))!;
+    expect(g.px).toBe(4);
+    expect(g.sure).toBe(true);
+  });
+  it('treats a tiny image with few colours as one pixel per bead', () => {
+    const g = detectPixelGrid(upscale(randomArt(32, 32), 1))!;
+    expect(g.px).toBe(1);
+  });
+  it('is not fooled by a smooth gradient', () => {
+    const width = 400;
+    const height = 400;
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const p = (y * width + x) * 4;
+        data[p] = (x * 255) / width;
+        data[p + 1] = (y * 255) / height;
+        data[p + 2] = 128 + 60 * Math.sin((x * y) / 3000);
+        data[p + 3] = 255;
+      }
+    }
+    expect(detectPixelGrid({ data, width, height })?.sure ?? false).toBe(false);
+  });
+});
+
+/** Writes a mask as text: # is subject, . is pale. */
+const paleOf = (rows: string[]) => Uint8Array.from(rows.join('').split('').map((c) => (c === '.' ? 1 : 0)));
+const show = (bg: Uint8Array, w: number) => {
+  const chars = [...bg].map((v) => (v ? '.' : '#')).join('');
+  return Array.from({ length: bg.length / w }, (_, i) => chars.slice(i * w, (i + 1) * w));
+};
+
+describe('background', () => {
+  const ringWithBreak = [
+    '.......',
+    '.#####.',
+    '.#...#.',
+    '.....#.',
+    '.#...#.',
+    '.#####.',
+    '.......',
+  ];
+  it('leaks through a broken outline without protection', () => {
+    const bg = findBackground(paleOf(ringWithBreak), 7, 7, 0);
+    expect(bg[3 * 7 + 3]).toBe(1);
+  });
+  it('holds at a one-cell break and keeps the inside', () => {
+    const bg = findBackground(paleOf(ringWithBreak), 7, 7, 1);
+    expect(bg[3 * 7 + 3]).toBe(0);
+    expect(bg[3 * 7 + 1]).toBe(0);
+    expect(bg[0]).toBe(1);
+  });
+  it('does not bridge the gap between two objects', () => {
+    const rows = [
+      '.......',
+      '.#####.',
+      '.......',
+      '.#####.',
+      '.......',
+    ];
+    const bg = findBackground(paleOf(rows), 7, 5, 1);
+    expect(show(bg, 7)[2]).toBe('.......');
+  });
+  it('removes small islands but keeps the subject', () => {
+    const rows = [
+      '##############',
+      '##############',
+      '##############',
+      '.............#',
+      '..............',
+    ];
+    const bg = Uint8Array.from(paleOf(rows));
+    bg[13 + 14 * 3] = 1;
+    bg[14 * 4 + 12] = 0;
+    dropSpecks(bg, 14, 5);
+    expect(bg[14 * 4 + 12]).toBe(1);
+    expect(bg[0]).toBe(0);
+  });
+});
+
+describe('outline', () => {
+  it('repaints a close colour and fills a pale break along the ring', () => {
+    const w = 7;
+    const h = 5;
+    const R = RED;
+    const r = NEAR_RED;
+    const W = WHITE;
+    const K = BLACK;
+    const cells = Int16Array.from([
+      W, W, W, W, W, W, W,
+      W, R, R, r, R, W, W,
+      W, R, K, K, W, W, W,
+      W, R, R, W, R, W, W,
+      W, W, W, W, W, W, W,
+    ]);
+    const bg = paleOf(['.......', '.####..', '.###...', '.###.#.', '.......']);
+    bg[3 * w + 3] = 0;
+    unifyOutline(cells, bg, w, h, colors, 1);
+    expect(cells[1 * w + 3]).toBe(R);
+    expect(cells[3 * w + 3]).toBe(R);
+    expect(cells[2 * w + 2]).toBe(K);
+  });
+  it('does nothing when switched off', () => {
+    const cells = Int16Array.from([RED, NEAR_RED]);
+    unifyOutline(cells, Uint8Array.from([0, 0]), 2, 1, colors, 0);
+    expect([...cells]).toEqual([RED, NEAR_RED]);
   });
 });
 
@@ -192,6 +368,11 @@ describe('pattern edits', () => {
     const doc = newDoc(3, 1, Int16Array.from([EMPTY, WHITE, BLACK]));
     expect(toggleBackground(doc, colors).cells[1]).toBe(EMPTY);
   });
+  it('uses the background worked out at generation', () => {
+    const doc = newDoc(3, 1, Int16Array.from([WHITE, WHITE, BLACK]), Uint8Array.from([1, 0, 0]));
+    expect([...toggleBackground(doc, colors).cells]).toEqual([EMPTY, WHITE, BLACK]);
+    expect([...toggleBackground(toggleMirror(doc), colors).cells]).toEqual([BLACK, WHITE, EMPTY]);
+  });
   it('never mutates the old state', () => {
     const doc = ring();
     const before = [...doc.cells];
@@ -219,5 +400,19 @@ describe('pattern edits', () => {
   it('sizes the finished piece at 2.6mm a bead', () => {
     expect(finishedCm(52)).toBe('13.5');
     expect(finishedCm(104)).toBe('27.0');
+  });
+});
+
+describe('framing the subject', () => {
+  it('fills the frame with a subject off to one side', () => {
+    const source = { width: 1000, height: 2000 };
+    const crop = fitCropToSubject(source, { x0: 100, y0: 800, x1: 500, y1: 1200 }, 1);
+    const place = placeImage(source, crop, 1000, 1000);
+    const scale = place.width / source.width;
+    expect(place.left + 100 * scale).toBeGreaterThanOrEqual(0);
+    expect(place.left + 500 * scale).toBeLessThanOrEqual(1000);
+    expect(place.top + 800 * scale).toBeGreaterThanOrEqual(0);
+    expect(place.top + 1200 * scale).toBeLessThanOrEqual(1000);
+    expect((400 * scale) / 1000).toBeGreaterThan(0.9);
   });
 });

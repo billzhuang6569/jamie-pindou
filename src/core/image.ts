@@ -1,6 +1,14 @@
 const MAX_SOURCE_SIDE = 2048;
+const MAX_SAMPLES_PER_CELL = 16;
+const MAX_SAMPLE_SIDE = 2400;
 
-export type SourceImage = { canvas: HTMLCanvasElement; width: number; height: number };
+export type SourceImage = {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  /** The decoded pixels, read once and kept. */
+  pixels: () => { data: Uint8ClampedArray; width: number; height: number };
+};
 
 async function decode(blob: Blob): Promise<CanvasImageSource & { width: number; height: number }> {
   if ('createImageBitmap' in window) {
@@ -31,12 +39,21 @@ export async function loadSource(blob: Blob): Promise<SourceImage> {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('canvas unavailable');
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, 0, 0, width, height);
   if ('close' in img && typeof img.close === 'function') img.close();
-  return { canvas, width, height };
+  let cached: Uint8ClampedArray | null = null;
+  return {
+    canvas,
+    width,
+    height,
+    pixels: () => {
+      cached ??= ctx.getImageData(0, 0, width, height).data;
+      return { data: cached, width, height };
+    },
+  };
 }
 
 /** How the picture sits in the frame. zoom 1 shows it whole; dx, dy shift it in frame widths and heights. */
@@ -58,23 +75,29 @@ export function placeImage(source: { width: number; height: number }, crop: Crop
   };
 }
 
-/** Draws the frame's contents at the given size. Anything outside the picture stays transparent. */
-export function renderCrop(source: SourceImage, crop: Crop, outW: number, outH: number): HTMLCanvasElement {
+/**
+ * Draws the frame's contents at the given size, unsmoothed by default. Blending would mix a thin
+ * line into its background before anyone could tell them apart. Outside the picture stays transparent.
+ */
+export function renderCrop(source: SourceImage, crop: Crop, outW: number, outH: number, smooth = false): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = outW;
   canvas.height = outH;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('canvas unavailable');
   const { left, top, width, height } = placeImage(source, crop, outW, outH);
-  // Blocky pixel art must stay blocky when enlarged; photos need smoothing when reduced.
-  ctx.imageSmoothingEnabled = width < source.width;
+  ctx.imageSmoothingEnabled = smooth;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source.canvas, left, top, width, height);
   return canvas;
 }
 
-/** Samples per cell side: high enough to see a cell's dominant colour, capped for huge grids. */
-export const samplesPerCell = (w: number, h: number) => Math.max(2, Math.min(10, Math.floor(1200 / Math.max(w, h))));
+/** Samples per cell side: about one per source pixel, so a thin line is seen, capped for big grids. */
+export function samplesPerCell(w: number, h: number, sourceW: number, sourceH: number): number {
+  const perCell = Math.ceil(Math.max(sourceW / w, sourceH / h));
+  const fits = Math.floor(MAX_SAMPLE_SIDE / Math.max(w, h));
+  return Math.max(2, Math.min(MAX_SAMPLES_PER_CELL, perCell, fits));
+}
 
 export function canvasToBlob(canvas: HTMLCanvasElement, type = 'image/png', quality?: number): Promise<Blob> {
   return new Promise((resolve, reject) => {

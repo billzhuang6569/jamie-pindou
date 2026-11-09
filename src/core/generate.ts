@@ -7,19 +7,80 @@ export const EMPTY = -1;
 export const MERGE_LEVELS = [
   { id: 0, label: '不合并', hint: '保留匹配到的所有颜色', threshold: 0 },
   { id: 1, label: '轻度', hint: '只合并几乎一样的颜色', threshold: 3 },
-  { id: 2, label: '中度', hint: '明显减少颜色种类，保留眼睛、描边这类小而突出的颜色', threshold: 7 },
-  { id: 3, label: '较强', hint: '颜色种类较少，细小的色差会被抹平', threshold: 11 },
+  { id: 2, label: '中度', hint: '明显减少颜色种类，保留眼睛、描边这类小而突出的颜色', threshold: 6 },
+  { id: 3, label: '较强', hint: '颜色种类较少，细小的色差会被抹平', threshold: 10 },
   { id: 4, label: '强力', hint: '大幅减少颜色数量，适合简单的图案', threshold: 16 },
 ] as const;
 
 /**
- * Picks one colour per cell. Uses the most common colour in the cell rather than the
- * average, so edges stay crisp instead of turning into a muddy in-between colour.
- * `samples` is RGBA at w*k by h*k.
+ * The "rich" colour setting, fitted to a hand-approved pattern: beads read duller than a
+ * glowing screen, so darkening and saturating brings the finished piece closer to the picture.
  */
-export function sampleCells(samples: Uint8ClampedArray, w: number, h: number, k: number): (RGB | null)[] {
+const RICH_GAMMA = 1.2;
+const RICH_SATURATION = 1.2;
+
+export function enrich([L, a, b]: Lab): Lab {
+  return [100 * (Math.min(100, Math.max(0, L)) / 100) ** RICH_GAMMA, a * RICH_SATURATION, b * RICH_SATURATION];
+}
+
+/** How far a minority colour must be from the dominant one to count as a separate line. */
+const LINE_MIN_CONTRAST = 25;
+const LINE_MIN_DARKER = 12;
+const LINE_PALE_FIELD = 70;
+const LINE_MIN_SHARE: Record<1 | 2, number> = { 1: 0.22, 2: 0.14 };
+
+type Bin = { n: number; r: number; g: number; b: number };
+
+const binRgb = (bin: Bin): RGB => [Math.round(bin.r / bin.n), Math.round(bin.g / bin.n), Math.round(bin.b / bin.n)];
+
+/** The most common colour among some bins, or a thin dark line against a pale field. */
+function pickColor(bins: Map<number, Bin>, opaque: number, lineStrength: 0 | 1 | 2): RGB {
+  let top: Bin | null = null;
+  for (const bin of bins.values()) if (!top || bin.n > top.n) top = bin;
+  const dominant = binRgb(top!);
+  if (lineStrength === 0) return dominant;
+  const field = rgbToLab(dominant);
+  if (field[0] <= LINE_PALE_FIELD) return dominant;
+  let farCount = 0;
+  let line: Bin | null = null;
+  for (const bin of bins.values()) {
+    if (bin === top) continue;
+    if (deltaE2000(rgbToLab(binRgb(bin)), field) <= LINE_MIN_CONTRAST) continue;
+    farCount += bin.n;
+    if (!line || bin.n > line.n) line = bin;
+  }
+  if (!line || farCount < LINE_MIN_SHARE[lineStrength] * opaque) return dominant;
+  const lineRgb = binRgb(line);
+  return rgbToLab(lineRgb)[0] < field[0] - LINE_MIN_DARKER ? lineRgb : dominant;
+}
+
+function addSample(bins: Map<number, Bin>, r: number, g: number, b: number) {
+  const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+  const bin = bins.get(key);
+  if (bin) {
+    bin.n++;
+    bin.r += r;
+    bin.g += g;
+    bin.b += b;
+  } else {
+    bins.set(key, { n: 1, r, g, b });
+  }
+}
+
+/**
+ * Picks one colour per cell. Uses the most common colour in the cell rather than the average,
+ * so edges stay crisp instead of turning into a muddy in-between. With `lineStrength` above
+ * zero, a thin dark line can win a cell it doesn't fill. `samples` is RGBA at w*k by h*k.
+ */
+export function sampleCells(
+  samples: Uint8ClampedArray,
+  w: number,
+  h: number,
+  k: number,
+  lineStrength: 0 | 1 | 2 = 0,
+): (RGB | null)[] {
   const out: (RGB | null)[] = new Array(w * h);
-  const bins = new Map<number, { n: number; r: number; g: number; b: number }>();
+  const bins = new Map<number, Bin>();
   const rowBytes = w * k * 4;
   for (let cy = 0; cy < h; cy++) {
     for (let cx = 0; cx < w; cx++) {
@@ -30,35 +91,46 @@ export function sampleCells(samples: Uint8ClampedArray, w: number, h: number, k:
         for (let sx = 0; sx < k; sx++, p += 4) {
           if (samples[p + 3] < 128) continue;
           opaque++;
-          const r = samples[p];
-          const g = samples[p + 1];
-          const b = samples[p + 2];
-          const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
-          const bin = bins.get(key);
-          if (bin) {
-            bin.n++;
-            bin.r += r;
-            bin.g += g;
-            bin.b += b;
-          } else {
-            bins.set(key, { n: 1, r, g, b });
-          }
+          addSample(bins, samples[p], samples[p + 1], samples[p + 2]);
         }
       }
-      if (opaque * 2 < k * k) {
-        out[cy * w + cx] = null;
-        continue;
-      }
-      let best: { n: number; r: number; g: number; b: number } | null = null;
-      for (const bin of bins.values()) if (!best || bin.n > best.n) best = bin;
-      out[cy * w + cx] = [Math.round(best!.r / best!.n), Math.round(best!.g / best!.n), Math.round(best!.b / best!.n)];
+      out[cy * w + cx] = opaque * 2 < k * k ? null : pickColor(bins, opaque, lineStrength);
     }
   }
   return out;
 }
 
+/** One colour from a rectangle of source pixels. Null when it is mostly transparent or off the image. */
+export function sampleRect(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): RGB | null {
+  const bins = new Map<number, Bin>();
+  const left = Math.max(0, Math.round(x0));
+  const top = Math.max(0, Math.round(y0));
+  const right = Math.min(width, Math.max(left + 1, Math.round(x1)));
+  const bottom = Math.min(height, Math.max(top + 1, Math.round(y1)));
+  let opaque = 0;
+  let total = 0;
+  for (let y = top; y < bottom; y++) {
+    for (let x = left; x < right; x++) {
+      const p = (y * width + x) * 4;
+      total++;
+      if (data[p + 3] < 128) continue;
+      opaque++;
+      addSample(bins, data[p], data[p + 1], data[p + 2]);
+    }
+  }
+  return total === 0 || opaque * 2 < total ? null : pickColor(bins, opaque, 0);
+}
+
 /** Nearest bead for each cell. CIE76 shortlists, CIEDE2000 decides, which keeps big grids fast. */
-export function matchCells(cells: (RGB | null)[], colors: Bead[], allowed: number[]): Int16Array {
+export function matchCells(cells: (RGB | null)[], colors: Bead[], allowed: number[], rich = false): Int16Array {
   const out = new Int16Array(cells.length);
   const cache = new Map<number, number>();
   const SHORTLIST = 12;
@@ -73,7 +145,7 @@ export function matchCells(cells: (RGB | null)[], colors: Bead[], allowed: numbe
     const key = (c[0] << 16) | (c[1] << 8) | c[2];
     let idx = cache.get(key);
     if (idx === undefined) {
-      const lab = rgbToLab(c);
+      const lab = rich ? enrich(rgbToLab(c)) : rgbToLab(c);
       for (let a = 0; a < allowed.length; a++) {
         const l = colors[allowed[a]].lab;
         dist[a] = (l[0] - lab[0]) ** 2 + (l[1] - lab[1]) ** 2 + (l[2] - lab[2]) ** 2;
@@ -95,9 +167,11 @@ export function matchCells(cells: (RGB | null)[], colors: Bead[], allowed: numbe
   return out;
 }
 
-function countColors(cells: Int16Array): Map<number, number> {
+function countColors(cells: Int16Array, skip?: Uint8Array): Map<number, number> {
   const counts = new Map<number, number>();
-  for (const v of cells) if (v !== EMPTY) counts.set(v, (counts.get(v) ?? 0) + 1);
+  cells.forEach((v, i) => {
+    if (v !== EMPTY && !skip?.[i]) counts.set(v, (counts.get(v) ?? 0) + 1);
+  });
   return counts;
 }
 
@@ -175,10 +249,13 @@ export function cleanStrays(cells: Int16Array, w: number, h: number, colors: Bea
   }
 }
 
-/** Keeps at most `max` colours, each time folding the colour whose loss is least visible. */
-export function limitColors(cells: Int16Array, colors: Bead[], max: number) {
+/**
+ * Keeps at most `max` colours, each time folding the colour whose loss is least visible.
+ * Cells in `skip`, such as a background about to be removed, don't count towards the limit.
+ */
+export function limitColors(cells: Int16Array, colors: Bead[], max: number, skip?: Uint8Array) {
   if (max <= 0) return;
-  const counts = countColors(cells);
+  const counts = countColors(cells, skip);
   const remap = new Map<number, number>();
   const live = new Set(counts.keys());
   while (live.size > max) {
@@ -202,27 +279,6 @@ export function limitColors(cells: Int16Array, colors: Bead[], max: number) {
     live.delete(from);
   }
   applyRemap(cells, remap);
-}
-
-export type GenerateOptions = {
-  mergeThreshold: number;
-  maxColors: number;
-};
-
-export function buildCells(
-  samples: Uint8ClampedArray,
-  w: number,
-  h: number,
-  k: number,
-  colors: Bead[],
-  allowed: number[],
-  { mergeThreshold, maxColors }: GenerateOptions,
-): Int16Array {
-  const cells = matchCells(sampleCells(samples, w, h, k), colors, allowed);
-  mergeSimilar(cells, colors, mergeThreshold);
-  cleanStrays(cells, w, h, colors, mergeThreshold);
-  limitColors(cells, colors, maxColors);
-  return cells;
 }
 
 export const isNearWhite = (lab: Lab) => lab[0] > 92 && Math.hypot(lab[1], lab[2]) < 8;
