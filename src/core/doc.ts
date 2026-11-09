@@ -12,18 +12,21 @@ export type PatternDoc = {
   mirrored: boolean;
   /** While the white background is off: each removed cell's old colour, else NOT_REMOVED. */
   bgRestore: Int16Array | null;
+  /** What generation worked out as background, judged on the original picture. */
+  bgMask?: Uint8Array | null;
 };
 
-export const newDoc = (w: number, h: number, cells: Int16Array): PatternDoc => ({
+export const newDoc = (w: number, h: number, cells: Int16Array, bgMask: Uint8Array | null = null): PatternDoc => ({
   w,
   h,
   cells,
   mirrored: false,
   bgRestore: null,
+  bgMask,
 });
 
-function flipRows(src: Int16Array, w: number, h: number): Int16Array {
-  const out = new Int16Array(src.length);
+function flipRows<T extends Int16Array | Uint8Array>(src: T, w: number, h: number): T {
+  const out = src.slice() as T;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) out[y * w + x] = src[y * w + (w - 1 - x)];
   }
@@ -34,6 +37,7 @@ export const toggleMirror = (doc: PatternDoc): PatternDoc => ({
   ...doc,
   cells: flipRows(doc.cells, doc.w, doc.h),
   bgRestore: doc.bgRestore && flipRows(doc.bgRestore, doc.w, doc.h),
+  bgMask: doc.bgMask && flipRows(doc.bgMask, doc.w, doc.h),
   mirrored: !doc.mirrored,
 });
 
@@ -76,7 +80,7 @@ export function toggleBackground(doc: PatternDoc, colors: Bead[]): PatternDoc {
     });
     return { ...doc, cells, bgRestore: null };
   }
-  const mask = backgroundMask(doc, colors);
+  const mask = doc.bgMask ?? backgroundMask(doc, colors);
   const cells = doc.cells.slice();
   const bgRestore = new Int16Array(cells.length).fill(NOT_REMOVED);
   mask.forEach((on, i) => {

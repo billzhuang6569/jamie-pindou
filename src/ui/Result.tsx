@@ -12,9 +12,13 @@ import {
 } from '../core/doc';
 import { EMPTY } from '../core/generate';
 import type { Brand } from '../core/palette';
+import type { Params } from '../core/pattern';
+import type { PixelGrid } from '../core/pixelGrid';
+import { AdjustSheet } from './AdjustSheet';
 import { BoardCanvas, type BoardHandle, type BoardMode, type BoardView, type BrushTool } from './BoardCanvas';
 import { ColorsSheet, PickerSheet } from './ColorSheets';
-import { BeadDot, ConfirmSheet, Header, Icon, IconButton, Segmented } from './parts';
+import { useBackGuard } from './nav';
+import { BeadDot, Header, Icon, IconButton, Segmented } from './parts';
 import { SaveSheet } from './SaveSheet';
 
 type Tab = 'source' | BoardView;
@@ -22,7 +26,7 @@ type Panel =
   | { kind: 'colors' }
   | { kind: 'picker'; purpose: 'paint' | 'selection' | 'replace' }
   | { kind: 'save' }
-  | { kind: 'reupload' }
+  | { kind: 'adjust' }
   | null;
 
 const HISTORY_LIMIT = 60;
@@ -50,6 +54,9 @@ function useHistory(initial: PatternDoc) {
         s.future.length === 0 ? s : { past: [...s.past, s.present], present: s.future[0], future: s.future.slice(1) },
       );
     },
+    reset(next: PatternDoc) {
+      setState({ past: [], present: next, future: [] });
+    },
   };
 }
 
@@ -76,18 +83,39 @@ function Tool({
 
 export function Result({
   initial,
+  generation,
+  name,
   brand,
+  params,
+  grid,
+  ratio,
+  followSize,
+  edited,
   croppedUrl,
   onChange,
   onBack,
-  onReupload,
+  onAdjust,
+  onMyColors,
+  onRecrop,
+  onChangeImage,
 }: {
   initial: PatternDoc;
+  /** Goes up when the pattern is rebuilt in place, which starts a fresh undo history. */
+  generation: number;
+  name: string;
   brand: Brand;
+  params: Params;
+  grid: PixelGrid | null;
+  ratio: number;
+  followSize: { w: number; h: number } | null;
+  edited: boolean;
   croppedUrl: string;
   onChange: (doc: PatternDoc, edited: boolean) => void;
   onBack: () => void;
-  onReupload: () => void;
+  onAdjust: (p: Params) => void;
+  onMyColors: () => void;
+  onRecrop: () => void;
+  onChangeImage: () => void;
 }) {
   const history = useHistory(initial);
   const { doc } = history;
@@ -120,7 +148,26 @@ export function Result({
     if (highlight !== null && !counts.some((c) => c.index === highlight)) setHighlight(null);
   }, [counts, highlight]);
 
+  const lastGeneration = useRef(generation);
+  useEffect(() => {
+    if (generation === lastGeneration.current) return;
+    lastGeneration.current = generation;
+    reported.current = initial;
+    history.reset(initial);
+    setSelection(null);
+    setHighlight(null);
+    setBrush(null);
+    // Only a new generation may replace the history, not every edit reported back as `initial`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generation]);
+
   const editing = mode !== 'view';
+  useBackGuard(() => {
+    if (mode === 'view') return false;
+    setMode('view');
+    setSelection(null);
+    return true;
+  });
   const view: BoardView = editing ? 'pattern' : tab === 'source' ? 'beads' : tab;
   const selectedCount = useMemo(() => (selection ? selection.reduce((n, v) => n + v, 0) : 0), [selection]);
   const selectedBreakdown = useMemo(() => {
@@ -180,13 +227,13 @@ export function Result({
     return list.includes(brush) ? list : [brush, ...list];
   }, [counts, brush]);
 
-  const title = mode === 'paint' ? '修豆块' : mode === 'select' ? '多选' : '我的图纸';
+  const title = mode === 'paint' ? '修豆块' : mode === 'select' ? '多选' : name;
 
   return (
     <div className={mode === 'select' ? 'screen result tall' : 'screen result'}>
       <Header
         title={title}
-        left={editing ? doneButton : <IconButton name="back" label="返回设置" onClick={onBack} />}
+        left={editing ? doneButton : <IconButton name="back" label="返回项目页" onClick={onBack} />}
         right={undoRedo}
       />
 
@@ -286,8 +333,9 @@ export function Result({
             </span>
           </button>
           <div className="cta">
-            <button type="button" className="btn btn-2" onClick={() => setPanel({ kind: 'reupload' })}>
-              重新上传
+            <button type="button" className="btn btn-2" onClick={() => setPanel({ kind: 'adjust' })}>
+              <Icon name="sliders" size={20} />
+              <span>调整图纸</span>
             </button>
             <button type="button" className="btn btn-1 grow" onClick={() => setPanel({ kind: 'save' })}>
               <Icon name="download" />
@@ -418,16 +466,21 @@ export function Result({
         />
       )}
       {panel?.kind === 'save' && <SaveSheet doc={doc} brand={brand} onClose={() => setPanel(null)} />}
-      {panel?.kind === 'reupload' && (
-        <ConfirmSheet
-          title="换一张图片？"
-          body="选好新图片后，当前图纸和上面的修改都会被替换。"
-          confirm="选择新图片"
-          onClose={() => setPanel(null)}
-          onConfirm={() => {
+      {panel?.kind === 'adjust' && (
+        <AdjustSheet
+          params={params}
+          grid={grid}
+          ratio={ratio}
+          followSize={followSize}
+          edited={edited}
+          onChange={onAdjust}
+          onMyColors={onMyColors}
+          onRecrop={() => {
             setPanel(null);
-            onReupload();
+            onRecrop();
           }}
+          onChangeImage={onChangeImage}
+          onClose={() => setPanel(null)}
         />
       )}
     </div>

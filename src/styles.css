@@ -259,6 +259,7 @@ p {
 /* The pegs continue the hero picture's own grid, which is 50 cells wide. */
 .hero-board {
   --peg: calc(min(100vw, var(--column)) / 50);
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   background-color: var(--board);
@@ -272,9 +273,183 @@ p {
   aspect-ratio: 50 / 40;
 }
 
-.home {
+.home-empty {
   height: 100dvh;
   min-height: 600px;
+}
+
+.hero-band {
+  position: relative;
+  flex: none;
+  background: var(--board);
+}
+
+.hero-band > img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 50 / 29;
+  object-fit: cover;
+  object-position: top;
+}
+
+.github-btn {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--white);
+  color: var(--ink);
+  box-shadow: 0 2px 10px rgb(54 27 80 / 0.18);
+}
+
+.pad-new {
+  flex: none;
+  padding: 16px 16px 0;
+}
+
+.projects {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 16px calc(12px + var(--safe-b));
+}
+
+.projects h1 {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.project-card {
+  position: relative;
+  min-width: 0;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--white);
+}
+
+.project-open {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: var(--board);
+}
+
+.thumb-image {
+  object-fit: contain;
+}
+
+.project-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 12px 10px;
+}
+
+.project-name {
+  padding-right: 28px;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-meta {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.project-more {
+  position: absolute;
+  right: 2px;
+  bottom: 30px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.menu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 16px 0;
+}
+
+.menu-field label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.menu-field input {
+  height: 48px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ground);
+  font-size: 16px;
+}
+
+.banner {
+  flex: none;
+  margin: 12px 16px 0;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 16px;
+  background: var(--yellow);
+  font-size: 13px;
+}
+
+.banner strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.follow-chip {
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.adjust-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 16px 16px;
+}
+
+.adjust-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.adjust-rows .field {
+  margin: 4px 0 8px;
+}
+
+.chip-scroll.bleed {
+  margin: 0 -16px;
 }
 
 .home-main {

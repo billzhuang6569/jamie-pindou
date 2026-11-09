@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { rgbCss, type RGB } from '../core/color';
+import { useBackGuard } from './nav';
 
 const PATHS: Record<string, ReactNode> = {
   back: <path d="M15 18l-6-6 6-6" />,
@@ -90,7 +91,38 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M20 20l-4-4" />
     </>
   ),
+  plus: (
+    <>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </>
+  ),
+  sliders: (
+    <>
+      <path d="M4 7h10" />
+      <path d="M18 7h2" />
+      <circle cx="16" cy="7" r="2" />
+      <path d="M4 17h2" />
+      <path d="M10 17h10" />
+      <circle cx="8" cy="17" r="2" />
+    </>
+  ),
+  more: (
+    <g fill="currentColor" stroke="none">
+      <circle cx="5" cy="12" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="19" cy="12" r="2" />
+    </g>
+  ),
 };
+
+export function GithubMark() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3z" />
+    </svg>
+  );
+}
 
 export function Icon({ name, size = 22 }: { name: keyof typeof PATHS; size?: number }) {
   return (
@@ -193,6 +225,10 @@ export function Sheet({
   const ref = useRef<HTMLElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
+  useBackGuard(() => {
+    close.current();
+    return true;
+  });
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     ref.current?.focus();
